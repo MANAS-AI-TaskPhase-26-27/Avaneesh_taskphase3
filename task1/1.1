@@ -1,0 +1,157 @@
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+train = pd.read_csv("train.csv")
+test = pd.read_csv("test.csv")
+
+print("Training shape:", train.shape)
+print("Testing shape:", test.shape)
+print(train.head())
+print(train.isnull().sum())
+
+train = train.dropna(subset=["close"])
+
+for df in [train, test]:
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["year"] = df["date"].dt.year
+    df["month"] = df["date"].dt.month
+    df["day"] = df["date"].dt.day
+    df.drop(columns=["date"], inplace=True)
+
+X_train = train.drop(columns=["close"])
+y_train = train["close"].to_numpy(dtype=float)
+X_test = test.drop(columns=["close"])
+
+num_cols = X_train.select_dtypes(include=np.number).columns
+cat_cols = X_train.select_dtypes(exclude=np.number).columns
+
+for col in num_cols:
+    value = X_train[col].median()
+    X_train[col] = X_train[col].fillna(value)
+    X_test[col] = X_test[col].fillna(value)
+
+for col in cat_cols:
+    mode = X_train[col].mode()
+    value = mode.iloc[0] if len(mode) > 0 else "Unknown"
+    X_train[col] = X_train[col].fillna(value)
+    X_test[col] = X_test[col].fillna(value)
+
+X_train = pd.get_dummies(X_train, dtype=int)
+X_test = pd.get_dummies(X_test, dtype=int)
+
+X_train, X_test = X_train.align(
+    X_test, join="left", axis=1, fill_value=0
+)
+
+X_test = X_test[X_train.columns]
+
+X = X_train.to_numpy(dtype=float)
+X_test = X_test.to_numpy(dtype=float)
+y = y_train.copy()
+
+mu = X.mean(axis=0)
+sigma = X.std(axis=0)
+sigma[sigma == 0] = 1
+
+X = (X - mu) / sigma
+X_test = (X_test - mu) / sigma
+
+y_mu = y.mean()
+y_sigma = y.std()
+
+if y_sigma == 0:
+    y_sigma = 1
+
+y = (y - y_mu) / y_sigma
+
+def compute_cost(X, y, w, b):
+    m = X.shape[0]
+    f_wb = X @ w + b
+    J = np.sum((f_wb - y) ** 2) / (2 * m)
+    return J
+
+def compute_gradient(X, y, w, b):
+    m = X.shape[0]
+    f_wb = X @ w + b
+    error = f_wb - y
+    dj_dw = (X.T @ error) / m
+    dj_db = np.sum(error) / m
+    return dj_dw, dj_db
+
+def gradient_descent(X, y, w, b, alpha, num_iters):
+    J_history = []
+
+    for i in range(num_iters):
+        dj_dw, dj_db = compute_gradient(X, y, w, b)
+        w = w - alpha * dj_dw
+        b = b - alpha * dj_db
+        J_history.append(compute_cost(X, y, w, b))
+
+    return w, b, J_history
+
+m, n = X.shape
+w = np.zeros(n)
+b = 0
+
+alpha = 0.01
+num_iters = 2000
+
+w, b, J_history = gradient_descent(
+    X, y, w, b, alpha, num_iters
+)
+
+print("\nFinal training cost:", J_history[-1])
+print("Bias b:", b)
+
+for name, weight in zip(X_train.columns, w):
+    print(name, ":", weight)
+
+f_wb = X_test @ w + b
+predictions = f_wb * y_sigma + y_mu
+
+actual = test["close"].to_numpy(dtype=float)
+valid = np.isfinite(actual)
+
+y_actual = actual[valid]
+y_pred = predictions[valid]
+
+if len(y_actual) > 0:
+    mae = np.mean(np.abs(y_actual - y_pred))
+    rmse = np.sqrt(np.mean((y_actual - y_pred) ** 2))
+    ss_res = np.sum((y_actual - y_pred) ** 2)
+    ss_tot = np.sum((y_actual - y_actual.mean()) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+
+    print("\nTEST RESULTS")
+    print("MAE:", mae)
+    print("RMSE:", rmse)
+    print("R2 Score:", r2)
+else:
+    print("\nNo actual test closing prices available.")
+
+plt.figure(figsize=(8, 5))
+plt.plot(J_history)
+plt.xlabel("Iterations")
+plt.ylabel("Cost J(w, b)")
+plt.title("Gradient Descent: Cost vs Iterations")
+plt.grid(True)
+plt.show()
+
+if len(y_actual) > 0:
+    limit = min(500, len(y_actual))
+
+    plt.figure(figsize=(8, 5))
+    plt.scatter(y_actual[:limit], y_pred[:limit], s=15)
+    plt.xlabel("Actual Close Price")
+    plt.ylabel("Predicted Close Price")
+    plt.title("Actual vs Predicted Closing Prices")
+    plt.grid(True)
+    plt.show()
+
+test["predicted_close"] = predictions
+test.to_csv("test_predictions.csv", index=False)
+
+print("\nPredictions saved to test_predictions.csv")
+print(test[["close", "predicted_close"]].head(10))
