@@ -1,0 +1,198 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+train = pd.read_csv("crime_train.csv")
+test = pd.read_csv("crime_test.csv")
+
+print("Training shape:", train.shape)
+print("Testing shape:", test.shape)
+print(train.head())
+
+#  EDA
+print("\nMissing values:")
+print(train.isnull().sum())
+
+print("\nCase status distribution:")
+print(train["closed"].value_counts())
+
+train["closed"].value_counts().plot(kind="bar")
+plt.title("Case Status Distribution")
+plt.xlabel("Closed")
+plt.ylabel("Number of Cases")
+plt.show()
+
+
+X_train = train.drop(
+    ["closed", "Num", "Unnamed: 0"],
+    axis=1,
+    errors="ignore"
+)
+
+y = train["closed"].map({"Yes": 1, "No": 0}).to_numpy()
+
+X_test = test.drop(
+    ["closed", "Num", "Unnamed: 0"],
+    axis=1,
+    errors="ignore"
+)
+
+
+y_test = None
+if "closed" in test.columns:
+    y_test = test["closed"].map({"Yes": 1, "No": 0}).to_numpy()
+
+
+for X in [X_train, X_test]:
+    date = pd.to_datetime(
+        X["case_filed"],
+        format="%m-%d-%Y %H:%M",
+        errors="coerce"
+    )
+
+    X["year"] = date.dt.year
+    X["month"] = date.dt.month
+    X["day"] = date.dt.day
+    X["hour"] = date.dt.hour
+    X["dayofweek"] = date.dt.dayofweek
+
+    X.drop("case_filed", axis=1, inplace=True)
+
+
+cat_cols = X_train.select_dtypes(
+    include=["object", "category"]
+).columns.tolist()
+
+num_cols = X_train.select_dtypes(
+    include=np.number
+).columns.tolist()
+
+
+for col in num_cols:
+    median = X_train[col].median()
+    X_train[col] = X_train[col].fillna(median)
+    X_test[col] = X_test[col].fillna(median)
+
+for col in cat_cols:
+    X_train[col] = X_train[col].fillna("Missing")
+    X_test[col] = X_test[col].fillna("Missing")
+
+
+X_train = pd.get_dummies(
+    X_train, columns=cat_cols, dtype=float
+)
+
+X_test = pd.get_dummies(
+    X_test, columns=cat_cols, dtype=float
+)
+
+# Ensure test columns match training columns
+columns = X_train.columns
+X_test = X_test.reindex(columns=columns, fill_value=0)
+
+#
+mean = X_train[num_cols].mean()
+std = X_train[num_cols].std().replace(0, 1).fillna(1)
+
+X_train[num_cols] = (X_train[num_cols] - mean) / std
+X_test[num_cols] = (X_test[num_cols] - mean) / std
+
+
+X = X_train.to_numpy(dtype=float)
+X_test = X_test.to_numpy(dtype=float)
+
+m, n = X.shape
+w = np.zeros(n)
+b = 0.0
+
+#
+def sigmoid(z):
+    z = np.clip(z, -500, 500)
+    return 1 / (1 + np.exp(-z))
+
+
+alpha = 0.05
+iterations = 3000
+cost_history = []
+
+for i in range(iterations):
+
+    z = X @ w + b
+    a = sigmoid(z)
+
+
+    cost = -(1 / m) * np.sum(
+        y * np.log(a + 1e-10)
+        + (1 - y) * np.log(1 - a + 1e-10)
+    )
+
+    # Calculate gradients
+    dw = (1 / m) * (X.T @ (a - y))
+    db = (1 / m) * np.sum(a - y)
+
+    # Update parameters
+    w = w - alpha * dw
+    b = b - alpha * db
+
+    if i % 100 == 0:
+        cost_history.append(cost)
+
+print("\nTraining completed.")
+print("Final cost:", cost)
+
+
+plt.plot(range(0, iterations, 100), cost_history)
+plt.xlabel("Iterations")
+plt.ylabel("Cost")
+plt.title("Cost vs Iterations")
+plt.show()
+
+
+z_test = X_test @ w + b
+a_test = sigmoid(z_test)
+
+y_pred = (a_test >= 0.5).astype(int)
+predictions = np.where(y_pred == 1, "Yes", "No")
+
+
+if y_test is not None:
+    accuracy = np.mean(y_pred == y_test) * 100
+    print("\nTest Accuracy:", accuracy, "%")
+
+
+result = pd.DataFrame({
+    "Num": test["Num"] if "Num" in test.columns else test.index,
+    "closed": predictions
+})
+
+result.to_csv("crime_logistic_predictions.csv", index=False)
+
+print("\nPredictions:")
+print(result.head())
+
+z_test = X_test @ w + b
+
+a_test = sigmoid(z_test)
+
+
+prediction = np.where(
+    a_test >= 0.5,
+    "Yes",
+    "No"
+)
+
+
+
+result = pd.DataFrame({
+    "Num": test["Num"],
+    "closed": prediction
+})
+
+result.to_csv(
+    "crime_logistic_predictions.csv",
+    index=False
+)
+
+print("\nPredictions:")
+print(result.head())
